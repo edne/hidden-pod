@@ -2,7 +2,10 @@
   (:import (java.nio.file Files)
            (com.msopentech.thali.java.toronionproxy JavaOnionProxyContext
                                                     JavaOnionProxyManager))
+  (:use [ring.adapter.jetty]
+        [ring.middleware.file])
   (:gen-class))
+
 
 (defn publish-hidden-service
   "Create an hidden service forwarding a port, return the address"
@@ -17,9 +20,17 @@
         onion-url)
       (throw (Exception. "Failed to run Tor")))))
 
+
+(defn handler [request]
+  {:status 404
+   :headers {"Content-Type" "text/html"}
+   :body "File not found"})
+
+
 (defn -main
-  "For now just forward a port to an hidden service"
+  ;"For now just forward a port to an hidden service"
+  "For now just serve a folder"
   [& args]
-  (println (publish-hidden-service 4000 80))
-  ;; The service dies when the program terminate
-  ) 
+  ;(println (publish-hidden-service 3000 80))
+  (run-jetty (wrap-file handler (first args))
+             {:port 3000}))
