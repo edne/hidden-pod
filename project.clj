@@ -1,8 +1,8 @@
 (defproject hidden-pod "0.1.0-SNAPSHOT"
   :description "FIXME: write description"
   :url "http://example.com/FIXME"
-  :license {:name "GNU Affero General Public License"
-            :url "http://www.gnu.org/licenses/agpl-3.0.html"}
+  :license {:name "The MIT License"
+            :url "https://opensource.org/licenses/MIT"}
   :resource-paths ["resources/jtorctl-briar.jar"]
   :dependencies [[org.clojure/clojure "1.7.0"]
                  [com.msopentech.thali/ThaliOnionProxyJava "0.0.2"]
