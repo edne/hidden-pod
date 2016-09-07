@@ -1,6 +1,6 @@
 (defproject hidden-pod "0.1.0-SNAPSHOT"
-  :description "FIXME: write description"
-  :url "http://example.com/FIXME"
+  :description "Static hidden services with no effort"
+  :url "https://github.com/edne/hidden-pod"
   :license {:name "The MIT License"
             :url "https://opensource.org/licenses/MIT"}
   :resource-paths ["resources/jtorctl-briar.jar"]
