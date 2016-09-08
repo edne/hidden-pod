@@ -4,6 +4,11 @@
                                                     JavaOnionProxyManager)))
 
 
+(defn- enable-network [proxy-manager]
+  (let [control-connection (.controlConnection proxy-manager)]
+    (.setConf control-connection "DisableNetwork" "0")))
+
+
 (defn- bootstrapped? [proxy-manager]
   (let [control-connection (.controlConnection proxy-manager)]
     (and control-connection
@@ -22,7 +27,7 @@
                           timeout-secs]
   {:pre [(> timeout-secs 0)]}
   (when (.installAndStartTorOp proxy-manager)
-    (.enableNetwork proxy-manager true)
+    (enable-network proxy-manager)
     (or (->> #(or (bootstrapped? proxy-manager)
                   (Thread/sleep 1000))
              (take timeout-secs)
