@@ -4,17 +4,33 @@
                                                     JavaOnionProxyManager)))
 
 
-(defn- start-proxy [proxy-manager]
-  (if-not (.startWithRepeat proxy-manager 30 5)
+(defn start-with-timeout [proxy-manager proxy-context
+                          timeout-secs]
+  {:pre [(> timeout-secs 0)]}
+  (when (.installAndStartTorOp proxy-manager)
+    (.enableNetwork proxy-manager true)
+    (or (->> #(or (.isBootstrapped proxy-manager)
+                  (Thread/sleep 1000))
+             repeatedly
+             (take timeout-secs)
+             (filter identity)
+             #(if % (first %)))
+        (do (.stop proxy-manager)
+            (.deleteAllFilesButHiddenServices proxy-context)
+            false))))
+
+
+(defn- start-proxy [proxy-manager proxy-context]
+  (if-not (start-with-timeout proxy-manager proxy-context 30)
     (throw (Exception. "Failed to run Tor"))))
 
 
 (defn- new-proxy-manager []
-  (let [proxy-manager (->> (into-array java.nio.file.attribute.FileAttribute [])
+  (let [proxy-context (->> (into-array java.nio.file.attribute.FileAttribute [])
                            (Files/createTempDirectory "tor-folder") .toFile
-                           (new JavaOnionProxyContext)
-                           (new JavaOnionProxyManager))]
-    (start-proxy proxy-manager)
+                           (new JavaOnionProxyContext))
+        proxy-manager (new JavaOnionProxyManager proxy-context)]
+    (start-proxy proxy-manager proxy-context)
     proxy-manager))
 
 
