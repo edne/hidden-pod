@@ -4,17 +4,31 @@
                                                     JavaOnionProxyManager)))
 
 
-(defn start-with-timeout [proxy-manager proxy-context
+(defn- bootstrapped? [proxy-manager]
+  (let [control-connection (.controlConnection proxy-manager)]
+    (and control-connection
+         (-> control-connection
+             (.getInfo "status/bootstrap-phase")
+             (.contains "PROGRESS=100")))))
+
+
+(defn- stop [proxy-manager]
+  (let [control-socket (.controlSocket proxy-manager)]
+    (if control-socket
+      (.close control-socket))))
+
+
+(defn- start-with-timeout [proxy-manager proxy-context
                           timeout-secs]
   {:pre [(> timeout-secs 0)]}
   (when (.installAndStartTorOp proxy-manager)
     (.enableNetwork proxy-manager true)
-    (or (->> #(or (.isBootstrapped proxy-manager)
+    (or (->> #(or (bootstrapped? proxy-manager)
                   (Thread/sleep 1000))
              (take timeout-secs)
              (filter identity)
              #(if % (first %)))
-        (do (.stop proxy-manager)
+        (do (stop proxy-manager)
             (.deleteAllFilesButHiddenServices proxy-context)
             false))))
 
