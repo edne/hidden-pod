@@ -1,5 +1,6 @@
 (ns hidden-pod.tor
   (:import (java.nio.file Files)
+           (java.util.concurrent TimeUnit)
            (com.msopentech.thali.java.toronionproxy JavaOnionProxyContext
                                                     JavaOnionProxyManager)))
 
@@ -10,11 +11,11 @@
 
 
 (defn- bootstrapped? [proxy-manager]
-  (let [control-connection (.controlConnection proxy-manager)]
+  (let [control-connection (.controlconnection proxy-manager)]
     (and control-connection
          (-> control-connection
-             (.getInfo "status/bootstrap-phase")
-             (.contains "PROGRESS=100")))))
+             (.getinfo "status/bootstrap-phase")
+             (.contains "progress=100")))))
 
 
 (defn- stop [proxy-manager]
@@ -38,23 +39,67 @@
             false))))
 
 
-(defn- start-proxy [proxy-manager proxy-context]
-  (if-not (start-with-timeout proxy-manager proxy-context 30)
-    (throw (Exception. "Failed to run Tor"))))
+(defn- start-proxy [proxy-manager]
+  (let [proxy-context (.onionProxyContext proxy-manager)]
+    (if-not (start-with-timeout proxy-manager proxy-context 30)
+            (throw (Exception. "Failed to run Tor")))))
+
+
+
+(defn- can-create-parent-dir [file]
+  (or (-> file
+          .getParentFile
+          .exists)
+      (-> file
+          .getParentFile
+          .mkdirs)))
+
+
+(defn- can-create-file [file]
+  (or (.exists file)
+      (.createNewFile file)))
+
+
+(defn- publish-hidden-service* [proxy-manager remote-port local-port]
+  (let [control-connection (.controlConnection proxy-manager)]
+    (when control-connection
+      (let [proxy-context (.onionProxyContext proxy-manager)
+            hostname-file (.getHostNameFile proxy-context)]
+
+        (if-not (can-create-parent-dir hostname-file)
+          (throw (Exception. "Could not create hostname file parent directory")))
+        (if-not (can-create-file hostname-file)
+          (throw (Exception. "Could not create hostname file")))
+
+        (let [hostname-file-observer (.generateWriteObserver proxy-context
+                                                             hostname-file)
+              conf [(str "HiddenServiceDir " (-> hostname-file
+                                                 .getParentFile
+                                                 .getAbsolutePath))
+                    (str "HiddenServicePort " remote-port " 127.0.0.1:" local-port)]]
+
+          (.setConf control-connection conf)
+          (.saveConf control-connection)
+
+          (if-not (.poll hostname-file-observer (* 30 1000)
+                         TimeUnit/MILLISECONDS)
+            (throw (Exception. "Wait for hidden service hostname file to be created expired"))))
+
+        (slurp hostname-file)))))
 
 
 (defn- new-proxy-manager []
-  (let [proxy-context (->> (into-array java.nio.file.attribute.FileAttribute [])
+  (let [proxy-manager (->> (into-array java.nio.file.attribute.FileAttribute [])
                            (Files/createTempDirectory "tor-folder") .toFile
-                           (new JavaOnionProxyContext))
-        proxy-manager (new JavaOnionProxyManager proxy-context)]
-    (start-proxy proxy-manager proxy-context)
+                           (new JavaOnionProxyContext)
+                           (new JavaOnionProxyManager))]
+    (start-proxy proxy-manager)
     proxy-manager))
 
 
 (defn publish-hidden-service
   "Create an hidden service forwarding a port, return the address"
   [local-port remote-port]
-  (let [onion-addr (.publishHiddenService (new-proxy-manager)
-                                          remote-port local-port)]
+  (let [onion-addr (publish-hidden-service* (new-proxy-manager)
+                                            remote-port local-port)]
     onion-addr))
