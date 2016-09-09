@@ -1,8 +1,9 @@
 (ns hidden-pod.tor
+  (:require [clojure.string :as s])
   (:import (java.nio.file Files)
            (java.net Socket)
-           (java.util.concurrent TimeUnit
-                                 CountDownLatch)
+           (java.util Scanner)
+           (java.util.concurrent TimeUnit)
            (net.freehaven.tor.control TorControlConnection)
            (com.msopentech.thali.toronionproxy OnionProxyManagerEventHandler
                                                FileUtilities)
@@ -68,40 +69,47 @@
       (.close control-socket))))
 
 
+(defn- start-tor [proxy-context owner]
+  (let [tor-path (-> proxy-context .getTorExecutableFile .getAbsolutePath)
+        config-path (-> proxy-context .getTorrcFile .getAbsolutePath)
+        pid (.getProcessId proxy-context)
+        cmd [tor-path "-f" config-path owner pid]
+        process-builder (new ProcessBuilder cmd)]
+    (.setEnvironmentArgsAndWorkingDirectoryForStart proxy-context process-builder)
+    (.start process-builder)))
+
+
+(defn- read-control-port [tor-process]
+  (let [input-stream (.getInputStream tor-process)
+        scanner (new Scanner input-stream)]
+    (->> #(.nextLine scanner)
+         repeatedly
+         (map #(re-find #"listening on port (\d+)\." %))
+         (filter identity)
+         first  ;; the first non-empy list of matches ["1234." "1234"]
+         last   ;; the last match in the list
+         Integer/parseInt)))
+
+
 (defn- install-and-start-tor [proxy-manager]
   (.installAndConfigureFiles proxy-manager)
   (let [proxy-context (.onionProxyContext proxy-manager)
         cookie-file (.getCookieFile proxy-context)
-        observer (new-observer proxy-context
-                               cookie-file)
-        tor-path (-> proxy-context .getTorExecutableFile .getAbsolutePath)
-        config-path (-> proxy-context .getTorrcFile .getAbsolutePath)
-        pid (.getProcessId proxy-context)
+        cookie-observer (new-observer proxy-context cookie-file)
         owner "__OwningControllerProcess"
-        cmd [tor-path "-f" config-path owner pid]
-        env (.getEnvironmentArgsForExec proxy-context)
-        process-builder (new ProcessBuilder cmd)]
-    (.setEnvironmentArgsAndWorkingDirectoryForStart proxy-context process-builder)
-    (let [tor-process (.start process-builder)
-          countdown-latch (new CountDownLatch 1)]
-      ; .eatstream on InputStream sets .control_port
-      (.eatStream proxy-manager (.getInputStream tor-process)
-                  false countdown-latch)
-      (.eatStream proxy-manager
-                  (.getErrorStream tor-process)
-                  true nil)
-      (wait-observer observer 3)
-      (.await countdown-latch))
-    (let [control-socket (new Socket "127.0.0.1" (.control_port proxy-manager))
-          control-connection (new TorControlConnection control-socket)]
-      (doto control-connection
-        (.authenticate (FileUtilities/read cookie-file))  ;; TODO: use clj read
-        (.takeOwnership)
-        (.resetConf [owner])
-        (.setEventHandler (new OnionProxyManagerEventHandler))
-        (.setEvents ["CIRC" "ORCONN" "NOTICE" "WARN" "ERR"]))
-      (set! (.controlSocket proxy-manager) control-socket)
-      (set! (.controlConnection proxy-manager) control-connection))))
+        tor-process (start-tor proxy-context owner)
+        control-port (read-control-port tor-process)
+        control-socket (new Socket "127.0.0.1" control-port)
+        control-connection (new TorControlConnection control-socket)]
+    (wait-observer cookie-observer 3)
+    (doto control-connection
+      (.authenticate (FileUtilities/read cookie-file))  ;; TODO: use clj read
+      (.takeOwnership)
+      (.resetConf [owner])
+      (.setEventHandler (new OnionProxyManagerEventHandler))
+      (.setEvents ["CIRC" "ORCONN" "NOTICE" "WARN" "ERR"]))
+    (set! (.controlSocket proxy-manager) control-socket)
+    (set! (.controlConnection proxy-manager) control-connection)))
 
 
 (defn- start-with-timeout [proxy-manager proxy-context
