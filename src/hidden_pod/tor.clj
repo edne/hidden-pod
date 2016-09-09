@@ -1,5 +1,6 @@
 (ns hidden-pod.tor
-  (:require [clojure.string :as s])
+  (:require [clojure.string :as s]
+            [clojure.java.io :as io])
   (:import (java.nio.file Files)
            (java.net Socket)
            (java.util Scanner)
@@ -91,8 +92,25 @@
          Integer/parseInt)))
 
 
+(defn- install-and-configure-files [proxy-manager]
+  (let [proxy-context (.onionProxyContext proxy-manager)]
+    (.installFiles proxy-context)
+    (if-not (->> proxy-context .getTorExecutableFile (.setExecutable proxy-manager))
+      (throw (Exception. "Could not make Tor executable")))
+    (let [torrc-file (.getTorrcFile proxy-context)
+          cookie-file    (-> proxy-context .getCookieFile .getAbsolutePath)
+          data-directory (-> proxy-context .getWorkingDirectory .getAbsolutePath)
+          geoip-file     (-> proxy-context .getGeoIpFile .getName)
+          geoipv6-file   (-> proxy-context .getGeoIpv6File .getName)]
+      (with-open [r (io/input-stream torrc-file)]
+        (println "CookieAuthFile" cookie-file)
+        (println "DataDirectory"  data-directory)
+        (println "GeoIPFile"      geoip-file)
+        (println "GeoIPv6File"    geoipv6-file)))))
+
+
 (defn- install-and-start-tor [proxy-manager]
-  (.installAndConfigureFiles proxy-manager)
+  (install-and-configure-files proxy-manager)
   (let [proxy-context (.onionProxyContext proxy-manager)
         cookie-file (.getCookieFile proxy-context)
         cookie-observer (new-observer proxy-context cookie-file)
