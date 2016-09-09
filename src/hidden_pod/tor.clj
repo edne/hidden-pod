@@ -60,32 +60,15 @@
       (.createNewFile file)))
 
 
-(defn- publish-hidden-service* [proxy-manager remote-port local-port]
-  (let [control-connection (.controlConnection proxy-manager)]
-    (when control-connection
-      (let [proxy-context (.onionProxyContext proxy-manager)
-            hostname-file (.getHostNameFile proxy-context)]
-
-        (if-not (can-create-parent-dir hostname-file)
-          (throw (Exception. "Could not create hostname file parent directory")))
-        (if-not (can-create-file hostname-file)
-          (throw (Exception. "Could not create hostname file")))
-
-        (let [hostname-file-observer (.generateWriteObserver proxy-context
-                                                             hostname-file)
-              conf [(str "HiddenServiceDir " (-> hostname-file
-                                                 .getParentFile
-                                                 .getAbsolutePath))
-                    (str "HiddenServicePort " remote-port " 127.0.0.1:" local-port)]]
-
-          (.setConf control-connection conf)
-          (.saveConf control-connection)
-
-          (if-not (.poll hostname-file-observer (* 30 1000)
-                         TimeUnit/MILLISECONDS)
-            (throw (Exception. "Wait for hidden service hostname file to be created expired"))))
-
-        (slurp hostname-file)))))
+(defn- set-conf [control-connection
+                 hostname-file
+                 remote-port local-port]
+  (.setConf control-connection
+            [(str "HiddenServiceDir " (-> hostname-file
+                                          .getParentFile
+                                          .getAbsolutePath))
+             (str "HiddenServicePort " remote-port " 127.0.0.1:" local-port)])
+  (.saveConf control-connection))
 
 
 (defn- new-proxy-manager []
@@ -97,9 +80,30 @@
     proxy-manager))
 
 
+(defn- new-observer [proxy-context hostname-file]
+  (if-not (can-create-parent-dir hostname-file)
+    (throw (Exception. "Could not create hostname file parent directory")))
+  (if-not (can-create-file hostname-file)
+    (throw (Exception. "Could not create hostname file")))
+  (.generateWriteObserver proxy-context hostname-file))
+
+
+(defn- wait-observer [observer timeout]
+  (if-not (.poll observer (* timeout 1000)
+                 TimeUnit/MILLISECONDS)
+    (throw (Exception. "Wait for hidden service hostname file to be created expired"))))
+
+
 (defn publish-hidden-service
   "Create an hidden service forwarding a port, return the address"
   [local-port remote-port]
-  (let [onion-addr (publish-hidden-service* (new-proxy-manager)
-                                            remote-port local-port)]
-    onion-addr))
+  (let [proxy-manager (new-proxy-manager)
+        proxy-context (.onionProxyContext proxy-manager)
+        hostname-file (.getHostNameFile proxy-context)
+        observer (new-observer proxy-context
+                               hostname-file)]
+    (set-conf (.controlConnection proxy-manager)
+              hostname-file
+              remote-port local-port)
+    (wait-observer observer 30)
+    (slurp hostname-file)))
