@@ -5,6 +5,7 @@
             :url "https://opensource.org/licenses/MIT"}
   :resource-paths ["resources/jtorctl-briar.jar"]
   :dependencies [[org.clojure/clojure "1.7.0"]
+                 [com.msopentech.thali/ThaliOnionProxyUniversal "0.0.2"]
                  [com.msopentech.thali/ThaliOnionProxyJava "0.0.2"]
                  [ring "1.5.0"]]
 
