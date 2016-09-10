@@ -1,5 +1,5 @@
 (ns hidden-pod.tor
-  (:require [clojure.string :as s]
+  (:require [clojure.string :as string]
             [clojure.java.io :as io])
   (:import (java.io File)
            (java.nio.file Files)
@@ -9,17 +9,8 @@
            (net.freehaven.tor.control TorControlConnection)
            (com.msopentech.thali.toronionproxy OnionProxyManagerEventHandler
                                                FileUtilities)
-           (com.msopentech.thali.java.toronionproxy JavaOnionProxyContext)))
-
-
-(defn- enable-network [control-connection]
-  (.setConf control-connection "DisableNetwork" "0"))
-
-
-(defn- bootstrapped? [control-connection]
-  (-> control-connection
-      (.getinfo "status/bootstrap-phase")
-      (.contains "progress=100")))
+           (com.msopentech.thali.java.toronionproxy JavaOnionProxyContext
+                                                    JavaWatchObserver)))
 
 
 (defn- can-create-parent-dir [file]
@@ -36,12 +27,40 @@
       (.createNewFile file)))
 
 
-(defn- new-observer [ctx file]
+(defn- get-os-name []
+  (-> "os.name"
+      System/getProperty
+      .toLowerCase))
+
+
+(defn- linux? []
+  (.contains (get-os-name) "linux"))
+
+
+(defn- windows? []
+  (.contains (get-os-name) "win"))
+
+
+(defn- mac? []
+  (.contains (get-os-name) "mac"))
+
+
+(defn- enable-network [control-connection]
+  (.setConf control-connection "DisableNetwork" "0"))
+
+
+(defn- bootstrapped? [control-connection]
+  (-> control-connection
+      (.getinfo "status/bootstrap-phase")
+      (.contains "progress=100")))
+
+
+(defn- new-observer [file]
   (if-not (can-create-parent-dir file)
     (throw (Exception. (str "Could not create " file " parent directory"))))
   (if-not (can-create-file file)
     (throw (Exception. (str "Could not create " file))))
-  (.generateWriteObserver (:proxy-context ctx) file))
+  (new JavaWatchObserver file))
 
 
 (defn- wait-observer [observer timeout]
@@ -78,19 +97,32 @@
          Integer/parseInt)))
 
 
+(defn- get-pid []
+  (-> (java.lang.management.ManagementFactory/getRuntimeMXBean)
+      .getName
+      (string/split #"@")
+      first))
+
+
 (defn- start-tor-process [ctx owner]
-  (let [proxy-context (:proxy-context ctx)
-        tor-path (-> :tor-exe-file ctx .getAbsolutePath)
+  (let [tor-path (-> :tor-exe-file ctx .getAbsolutePath)
         config-path (-> :torrc-file ctx .getAbsolutePath)
-        pid (.getProcessId proxy-context)
+        working-dir (-> :working-dir ctx .getAbsolutePath)
+        pid (get-pid)
         cmd [tor-path "-f" config-path owner pid]
-        process-builder (new ProcessBuilder cmd)]
-    (.setEnvironmentArgsAndWorkingDirectoryForStart proxy-context process-builder)
+        process-builder (new ProcessBuilder cmd)
+        environment (.environment process-builder)]
+    (.put environment "HOME" working-dir)
+    (if (linux?)
+      (.put environment "LD_LIBRARY_PATH" working-dir))
     (.start process-builder)))
 
 
+(defn- install-files [ctx]
+  (.installFiles (:proxy-context ctx)))
+
+
 (defn- configure-files [ctx]
-  (.installFiles (:proxy-context ctx))
   (if-not (-> :tor-exe-file ctx (.setExecutable true))
     (throw (Exception. "Could not make Tor executable")))
   (let [torrc-file (:torrc-file ctx)
@@ -131,9 +163,10 @@
 
 
 (defn- start-tor [ctx]
+  (install-files ctx)
   (configure-files ctx)
   (let [cookie-file (:cookie-file ctx)
-        cookie-observer (new-observer ctx cookie-file)
+        cookie-observer (new-observer cookie-file)
         owner "__OwningControllerProcess"
         tor-process (start-tor-process ctx owner)
         control-port (read-control-port tor-process)
@@ -147,6 +180,13 @@
                         30)))
 
 
+(defn- get-tor-exe-filename []
+  (cond (linux?) "tor"
+        (windows?) "tor.exe"
+        (mac?) "tor.real"
+        :else (throw (Exception. "Unsupported OS"))))
+
+
 (defn- create-context []
   (let [working-dir (->> (into-array java.nio.file.attribute.FileAttribute [])
                          (Files/createTempDirectory "tor-folder") .toFile)
@@ -157,11 +197,14 @@
         torrc-name "torrc"]
     {:proxy-context proxy-context
      :working-dir working-dir
+     :geoip-name geoip-name
+     :geoipv6-name geoipv6-name
+     :torrc-name torrc-name
      :geoip-file (new File working-dir geoip-name)
      :geoipv6-file (new File working-dir geoipv6-name)
      :torrc-file  (new File working-dir torrc-name)
      :tor-exe-file (new File working-dir
-                        (.getTorExecutableFileName proxy-context))
+                        (get-tor-exe-filename))
      :cookie-file (new File working-dir ".tor/control_auth_cookie")
      :hostname-file (new File working-dir
                          (str "/" hiddenservice-dir-name "/hostname"))}))
@@ -175,7 +218,7 @@
                                start-tor
                                :control-connection)
         hostname-file (:hostname-file ctx)
-        observer (new-observer ctx hostname-file)]
+        observer (new-observer hostname-file)]
     (set-conf control-connection
               hostname-file
               remote-port local-port)
