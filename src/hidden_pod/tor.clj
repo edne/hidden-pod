@@ -65,16 +65,6 @@
     (.close control-socket)))
 
 
-(defn- start-tor [proxy-context owner]
-  (let [tor-path (-> proxy-context .getTorExecutableFile .getAbsolutePath)
-        config-path (-> proxy-context .getTorrcFile .getAbsolutePath)
-        pid (.getProcessId proxy-context)
-        cmd [tor-path "-f" config-path owner pid]
-        process-builder (new ProcessBuilder cmd)]
-    (.setEnvironmentArgsAndWorkingDirectoryForStart proxy-context process-builder)
-    (.start process-builder)))
-
-
 (defn- read-control-port [tor-process]
   (let [input-stream (.getInputStream tor-process)
         scanner (new Scanner input-stream)]
@@ -87,7 +77,17 @@
          Integer/parseInt)))
 
 
-(defn- install-and-configure-files [data]
+(defn- start-tor-process [proxy-context owner]
+  (let [tor-path (-> proxy-context .getTorExecutableFile .getAbsolutePath)
+        config-path (-> proxy-context .getTorrcFile .getAbsolutePath)
+        pid (.getProcessId proxy-context)
+        cmd [tor-path "-f" config-path owner pid]
+        process-builder (new ProcessBuilder cmd)]
+    (.setEnvironmentArgsAndWorkingDirectoryForStart proxy-context process-builder)
+    (.start process-builder)))
+
+
+(defn- configure-files [data]
   (let [proxy-context (:proxy-context data)]
     (.installFiles proxy-context)
     (if-not (-> proxy-context .getTorExecutableFile (.setExecutable true))
@@ -101,29 +101,16 @@
         (println "CookieAuthFile" cookie-file)
         (println "DataDirectory"  data-directory)
         (println "GeoIPFile"      geoip-file)
-        (println "GeoIPv6File"    geoipv6-file))))
-  data)
+        (println "GeoIPv6File"    geoipv6-file)))))
 
 
-(defn- install-and-start-tor [data]
-  (let [proxy-context (:proxy-context data)
-        cookie-file (.getCookieFile proxy-context)
-        cookie-observer (new-observer proxy-context cookie-file)
-        owner "__OwningControllerProcess"
-        tor-process (start-tor proxy-context owner)
-        control-port (read-control-port tor-process)
-        control-socket (new Socket "127.0.0.1" control-port)
-        control-connection (new TorControlConnection control-socket)]
-    (wait-observer cookie-observer 3)
-    (doto control-connection
-      (.authenticate (FileUtilities/read cookie-file))  ;; TODO: use clj read
-      (.takeOwnership)
-      (.resetConf [owner])
-      (.setEventHandler (new OnionProxyManagerEventHandler))
-      (.setEvents ["CIRC" "ORCONN" "NOTICE" "WARN" "ERR"]))
-    (merge data {:control-socket control-socket
-                 :control-connection control-connection
-                 :cookie-file cookie-file})))
+(defn- authenticate [control-connection cookie-file owner]
+  (doto control-connection
+    (.authenticate (FileUtilities/read cookie-file))  ;; TODO: use clj read
+    (.takeOwnership)
+    (.resetConf [owner])
+    (.setEventHandler (new OnionProxyManagerEventHandler))
+    (.setEvents ["CIRC" "ORCONN" "NOTICE" "WARN" "ERR"])))
 
 
 (defn- start-with-timeout [data timeout-secs]
@@ -132,38 +119,58 @@
         control-connection (:control-connection data)
         control-socket (:control-socket data)]
     (enable-network control-connection)
-    (or (->> #(or (bootstrapped? control-connection)
-                  (Thread/sleep 1000))
-             (take timeout-secs)
-             (filter identity)
-             #(if % (first %)))
-        (do (stop-proxy control-socket)
-            (.deleteAllFilesButHiddenServices proxy-context)
-            false))))
+    (if-not (->> #(or (bootstrapped? control-connection)
+                      (Thread/sleep 1000))
+                 (take timeout-secs)
+                 (filter identity)
+                 #(if % (first %)))
+      (do (stop-proxy control-socket)
+          (.deleteAllFilesButHiddenServices proxy-context)
+          (throw (Exception. "Failed to run Tor")))
+      data)))
 
 
-(defn- start-proxy []
-  (let [proxy-context (->> (into-array java.nio.file.attribute.FileAttribute [])
-                           (Files/createTempDirectory "tor-folder") .toFile
-                           (new JavaOnionProxyContext))
-        data* {:proxy-context proxy-context}
-        data (-> data*
-                 install-and-configure-files
-                 install-and-start-tor)]
-    (if-not (start-with-timeout data 30)
-            (throw (Exception. "Failed to run Tor"))
-            data)))
+(defn- start-tor [data]
+  (configure-files data)
+  (let [proxy-context (:proxy-context data)
+        cookie-file (.getCookieFile proxy-context)
+        cookie-observer (new-observer proxy-context cookie-file)
+        owner "__OwningControllerProcess"
+        tor-process (start-tor-process proxy-context owner)
+        control-port (read-control-port tor-process)
+        control-socket (new Socket "127.0.0.1" control-port)
+        control-connection (new TorControlConnection control-socket)]
+    (wait-observer cookie-observer 3)
+    (authenticate control-connection cookie-file owner)
+    (start-with-timeout (merge data {:control-socket control-socket
+                                     :control-connection control-connection
+                                     :cookie-file cookie-file})
+                        30)))
+
+
+(defn- start-proxy [data*]
+  (let [data (-> data*
+                 start-tor)]
+    data))
+
+
+(defn- create-context []
+  (->> (into-array java.nio.file.attribute.FileAttribute [])
+       (Files/createTempDirectory "tor-folder") .toFile
+       (new JavaOnionProxyContext)))
 
 
 (defn publish-hidden-service
   "Create an hidden service forwarding a port, return the address"
   [local-port remote-port]
-  (let [data (start-proxy)
-        proxy-context (:proxy-context data)
+  (let [proxy-context (create-context)
+        control-connection (-> {:proxy-context proxy-context}
+                               start-tor
+                               :control-connection)
         hostname-file (.getHostNameFile proxy-context)
         observer (new-observer proxy-context
                                hostname-file)]
-    (set-conf (:control-connection data)
+    (set-conf control-connection
               hostname-file
               remote-port local-port)
     (wait-observer observer 30)
