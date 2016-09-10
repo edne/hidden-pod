@@ -8,21 +8,17 @@
            (net.freehaven.tor.control TorControlConnection)
            (com.msopentech.thali.toronionproxy OnionProxyManagerEventHandler
                                                FileUtilities)
-           (com.msopentech.thali.java.toronionproxy JavaOnionProxyContext
-                                                    JavaOnionProxyManager)))
+           (com.msopentech.thali.java.toronionproxy JavaOnionProxyContext)))
 
 
-(defn- enable-network [proxy-manager]
-  (let [control-connection (.controlConnection proxy-manager)]
-    (.setConf control-connection "DisableNetwork" "0")))
+(defn- enable-network [control-connection]
+  (.setConf control-connection "DisableNetwork" "0"))
 
 
-(defn- bootstrapped? [proxy-manager]
-  (let [control-connection (.controlconnection proxy-manager)]
-    (and control-connection
-         (-> control-connection
-             (.getinfo "status/bootstrap-phase")
-             (.contains "progress=100")))))
+(defn- bootstrapped? [control-connection]
+  (-> control-connection
+      (.getinfo "status/bootstrap-phase")
+      (.contains "progress=100")))
 
 
 (defn- can-create-parent-dir [file]
@@ -64,10 +60,9 @@
   (.saveConf control-connection))
 
 
-(defn- stop-proxy [proxy-manager]
-  (let [control-socket (.controlSocket proxy-manager)]
-    (if control-socket
-      (.close control-socket))))
+(defn- stop-proxy [control-socket]
+  (if control-socket
+    (.close control-socket)))
 
 
 (defn- start-tor [proxy-context owner]
@@ -92,10 +87,10 @@
          Integer/parseInt)))
 
 
-(defn- install-and-configure-files [proxy-manager]
-  (let [proxy-context (.onionProxyContext proxy-manager)]
+(defn- install-and-configure-files [data]
+  (let [proxy-context (:proxy-context data)]
     (.installFiles proxy-context)
-    (if-not (->> proxy-context .getTorExecutableFile (.setExecutable proxy-manager))
+    (if-not (-> proxy-context .getTorExecutableFile (.setExecutable true))
       (throw (Exception. "Could not make Tor executable")))
     (let [torrc-file (.getTorrcFile proxy-context)
           cookie-file    (-> proxy-context .getCookieFile .getAbsolutePath)
@@ -106,12 +101,12 @@
         (println "CookieAuthFile" cookie-file)
         (println "DataDirectory"  data-directory)
         (println "GeoIPFile"      geoip-file)
-        (println "GeoIPv6File"    geoipv6-file)))))
+        (println "GeoIPv6File"    geoipv6-file))))
+  data)
 
 
-(defn- install-and-start-tor [proxy-manager]
-  (install-and-configure-files proxy-manager)
-  (let [proxy-context (.onionProxyContext proxy-manager)
+(defn- install-and-start-tor [data]
+  (let [proxy-context (:proxy-context data)
         cookie-file (.getCookieFile proxy-context)
         cookie-observer (new-observer proxy-context cookie-file)
         owner "__OwningControllerProcess"
@@ -126,49 +121,49 @@
       (.resetConf [owner])
       (.setEventHandler (new OnionProxyManagerEventHandler))
       (.setEvents ["CIRC" "ORCONN" "NOTICE" "WARN" "ERR"]))
-    (set! (.controlSocket proxy-manager) control-socket)
-    (set! (.controlConnection proxy-manager) control-connection)))
+    (merge data {:control-socket control-socket
+                 :control-connection control-connection
+                 :cookie-file cookie-file})))
 
 
-(defn- start-with-timeout [proxy-manager proxy-context
-                           timeout-secs]
+(defn- start-with-timeout [data timeout-secs]
   {:pre [(> timeout-secs 0)]}
-  (install-and-start-tor proxy-manager)
-  (enable-network proxy-manager)
-  (or (->> #(or (bootstrapped? proxy-manager)
-                (Thread/sleep 1000))
-           (take timeout-secs)
-           (filter identity)
-           #(if % (first %)))
-      (do (stop-proxy proxy-manager)
-          (.deleteAllFilesButHiddenServices proxy-context)
-          false)))
+  (let [proxy-context (:proxy-context data)
+        control-connection (:control-connection data)
+        control-socket (:control-socket data)]
+    (enable-network control-connection)
+    (or (->> #(or (bootstrapped? control-connection)
+                  (Thread/sleep 1000))
+             (take timeout-secs)
+             (filter identity)
+             #(if % (first %)))
+        (do (stop-proxy control-socket)
+            (.deleteAllFilesButHiddenServices proxy-context)
+            false))))
 
 
-(defn- start-proxy [proxy-manager]
-  (let [proxy-context (.onionProxyContext proxy-manager)]
-    (if-not (start-with-timeout proxy-manager proxy-context 30)
-            (throw (Exception. "Failed to run Tor")))))
-
-
-(defn- new-proxy-manager []
-  (let [proxy-manager (->> (into-array java.nio.file.attribute.FileAttribute [])
+(defn- start-proxy []
+  (let [proxy-context (->> (into-array java.nio.file.attribute.FileAttribute [])
                            (Files/createTempDirectory "tor-folder") .toFile
-                           (new JavaOnionProxyContext)
-                           (new JavaOnionProxyManager))]
-    (start-proxy proxy-manager)
-    proxy-manager))
+                           (new JavaOnionProxyContext))
+        data* {:proxy-context proxy-context}
+        data (-> data*
+                 install-and-configure-files
+                 install-and-start-tor)]
+    (if-not (start-with-timeout data 30)
+            (throw (Exception. "Failed to run Tor"))
+            data)))
 
 
 (defn publish-hidden-service
   "Create an hidden service forwarding a port, return the address"
   [local-port remote-port]
-  (let [proxy-manager (new-proxy-manager)
-        proxy-context (.onionProxyContext proxy-manager)
+  (let [data (start-proxy)
+        proxy-context (:proxy-context data)
         hostname-file (.getHostNameFile proxy-context)
         observer (new-observer proxy-context
                                hostname-file)]
-    (set-conf (.controlConnection proxy-manager)
+    (set-conf (:control-connection data)
               hostname-file
               remote-port local-port)
     (wait-observer observer 30)
