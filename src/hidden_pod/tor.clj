@@ -1,7 +1,8 @@
 (ns hidden-pod.tor
   (:require [clojure.string :as s]
             [clojure.java.io :as io])
-  (:import (java.nio.file Files)
+  (:import (java.io File)
+           (java.nio.file Files)
            (java.net Socket)
            (java.util Scanner)
            (java.util.concurrent TimeUnit)
@@ -35,12 +36,12 @@
       (.createNewFile file)))
 
 
-(defn- new-observer [proxy-context file]
+(defn- new-observer [ctx file]
   (if-not (can-create-parent-dir file)
     (throw (Exception. (str "Could not create " file " parent directory"))))
   (if-not (can-create-file file)
     (throw (Exception. (str "Could not create " file))))
-  (.generateWriteObserver proxy-context file))
+  (.generateWriteObserver (:proxy-context ctx) file))
 
 
 (defn- wait-observer [observer timeout]
@@ -77,9 +78,10 @@
          Integer/parseInt)))
 
 
-(defn- start-tor-process [proxy-context owner]
-  (let [tor-path (-> proxy-context .getTorExecutableFile .getAbsolutePath)
-        config-path (-> proxy-context .getTorrcFile .getAbsolutePath)
+(defn- start-tor-process [ctx owner]
+  (let [proxy-context (:proxy-context ctx)
+        tor-path (-> :tor-exe-file ctx .getAbsolutePath)
+        config-path (-> :torrc-file ctx .getAbsolutePath)
         pid (.getProcessId proxy-context)
         cmd [tor-path "-f" config-path owner pid]
         process-builder (new ProcessBuilder cmd)]
@@ -87,21 +89,20 @@
     (.start process-builder)))
 
 
-(defn- configure-files [data]
-  (let [proxy-context (:proxy-context data)]
-    (.installFiles proxy-context)
-    (if-not (-> proxy-context .getTorExecutableFile (.setExecutable true))
-      (throw (Exception. "Could not make Tor executable")))
-    (let [torrc-file (.getTorrcFile proxy-context)
-          cookie-file    (-> proxy-context .getCookieFile .getAbsolutePath)
-          data-directory (-> proxy-context .getWorkingDirectory .getAbsolutePath)
-          geoip-file     (-> proxy-context .getGeoIpFile .getName)
-          geoipv6-file   (-> proxy-context .getGeoIpv6File .getName)]
-      (with-open [r (io/input-stream torrc-file)]
-        (println "CookieAuthFile" cookie-file)
-        (println "DataDirectory"  data-directory)
-        (println "GeoIPFile"      geoip-file)
-        (println "GeoIPv6File"    geoipv6-file)))))
+(defn- configure-files [ctx]
+  (.installFiles (:proxy-context ctx))
+  (if-not (-> :tor-exe-file ctx (.setExecutable true))
+    (throw (Exception. "Could not make Tor executable")))
+  (let [torrc-file (:torrc-file ctx)
+        cookie-file    (-> :cookie-file ctx .getAbsolutePath)
+        data-directory (-> :working-dir ctx .getAbsolutePath)
+        geoip-file     (-> :geoip-file ctx .getName)
+        geoipv6-file   (-> :geoipv6-file ctx .getName)]
+    (with-open [r (io/input-stream torrc-file)]
+      (println "CookieAuthFile" cookie-file)
+      (println "DataDirectory"  data-directory)
+      (println "GeoIPFile"      geoip-file)
+      (println "GeoIPv6File"    geoipv6-file))))
 
 
 (defn- authenticate [control-connection cookie-file owner]
@@ -113,11 +114,10 @@
     (.setEvents ["CIRC" "ORCONN" "NOTICE" "WARN" "ERR"])))
 
 
-(defn- start-with-timeout [data timeout-secs]
+(defn- start-with-timeout [ctx timeout-secs]
   {:pre [(> timeout-secs 0)]}
-  (let [proxy-context (:proxy-context data)
-        control-connection (:control-connection data)
-        control-socket (:control-socket data)]
+  (let [control-connection (:control-connection ctx)
+        control-socket (:control-socket ctx)]
     (enable-network control-connection)
     (if-not (->> #(or (bootstrapped? control-connection)
                       (Thread/sleep 1000))
@@ -125,51 +125,57 @@
                  (filter identity)
                  #(if % (first %)))
       (do (stop-proxy control-socket)
-          (.deleteAllFilesButHiddenServices proxy-context)
+          (.deleteAllFilesButHiddenServices (:proxy-context ctx))
           (throw (Exception. "Failed to run Tor")))
-      data)))
+      ctx)))
 
 
-(defn- start-tor [data]
-  (configure-files data)
-  (let [proxy-context (:proxy-context data)
-        cookie-file (.getCookieFile proxy-context)
-        cookie-observer (new-observer proxy-context cookie-file)
+(defn- start-tor [ctx]
+  (configure-files ctx)
+  (let [cookie-file (:cookie-file ctx)
+        cookie-observer (new-observer ctx cookie-file)
         owner "__OwningControllerProcess"
-        tor-process (start-tor-process proxy-context owner)
+        tor-process (start-tor-process ctx owner)
         control-port (read-control-port tor-process)
         control-socket (new Socket "127.0.0.1" control-port)
         control-connection (new TorControlConnection control-socket)]
     (wait-observer cookie-observer 3)
     (authenticate control-connection cookie-file owner)
-    (start-with-timeout (merge data {:control-socket control-socket
+    (start-with-timeout (merge ctx {:control-socket control-socket
                                      :control-connection control-connection
                                      :cookie-file cookie-file})
                         30)))
 
 
-(defn- start-proxy [data*]
-  (let [data (-> data*
-                 start-tor)]
-    data))
-
-
 (defn- create-context []
-  (->> (into-array java.nio.file.attribute.FileAttribute [])
-       (Files/createTempDirectory "tor-folder") .toFile
-       (new JavaOnionProxyContext)))
+  (let [working-dir (->> (into-array java.nio.file.attribute.FileAttribute [])
+                         (Files/createTempDirectory "tor-folder") .toFile)
+        proxy-context (new JavaOnionProxyContext working-dir)
+        hiddenservice-dir-name "hiddenservice"
+        geoip-name "geoip"
+        geoipv6-name "geoipv6"
+        torrc-name "torrc"]
+    {:proxy-context proxy-context
+     :working-dir working-dir
+     :geoip-file (new File working-dir geoip-name)
+     :geoipv6-file (new File working-dir geoipv6-name)
+     :torrc-file  (new File working-dir torrc-name)
+     :tor-exe-file (new File working-dir
+                        (.getTorExecutableFileName proxy-context))
+     :cookie-file (new File working-dir ".tor/control_auth_cookie")
+     :hostname-file (new File working-dir
+                         (str "/" hiddenservice-dir-name "/hostname"))}))
 
 
 (defn publish-hidden-service
   "Create an hidden service forwarding a port, return the address"
   [local-port remote-port]
-  (let [proxy-context (create-context)
-        control-connection (-> {:proxy-context proxy-context}
+  (let [ctx (create-context)
+        control-connection (-> ctx
                                start-tor
                                :control-connection)
-        hostname-file (.getHostNameFile proxy-context)
-        observer (new-observer proxy-context
-                               hostname-file)]
+        hostname-file (:hostname-file ctx)
+        observer (new-observer ctx hostname-file)]
     (set-conf control-connection
               hostname-file
               remote-port local-port)
