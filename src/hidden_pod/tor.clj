@@ -133,15 +133,11 @@
   (let [torrc-file (:torrc-file ctx)
         cookie-file    (-> :cookie-file ctx .getAbsolutePath)
         data-directory (-> :working-dir ctx .getAbsolutePath)
-        geoip-file     (-> :geoip-file ctx .getName)
-        geoipv6-file   (-> :geoipv6-file ctx .getName)
         file-writer (new FileWriter torrc-file true)
         buffered-writer (new BufferedWriter file-writer)
         print-writer (new PrintWriter buffered-writer)]
     (.println print-writer (str "CookieAuthFile " cookie-file))
     (.println print-writer (str "DataDirectory " data-directory))
-    (.println print-writer (str "GeoIPFile " geoip-file))
-    (.println print-writer (str "GeoIPv6File " geoipv6-file))
     (.close print-writer)))
 
 
@@ -200,16 +196,10 @@
                          (Files/createTempDirectory "tor-folder") .toFile)
         proxy-context (new JavaOnionProxyContext working-dir)
         hiddenservice-dir-name "hiddenservice"
-        geoip-name "geoip"
-        geoipv6-name "geoipv6"
         torrc-name "torrc"]
     {:proxy-context proxy-context
      :working-dir working-dir
-     :geoip-name geoip-name
-     :geoipv6-name geoipv6-name
      :torrc-name torrc-name
-     :geoip-file (new File working-dir geoip-name)
-     :geoipv6-file (new File working-dir geoipv6-name)
      :torrc-file  (new File working-dir torrc-name)
      :tor-exe-file (new File working-dir
                         (get-tor-exe-filename))
