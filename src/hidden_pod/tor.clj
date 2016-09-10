@@ -1,7 +1,10 @@
 (ns hidden-pod.tor
   (:require [clojure.string :as string]
             [clojure.java.io :as io])
-  (:import (java.io File)
+  (:import (java.io File
+                    FileWriter
+                    BufferedWriter
+                    PrintWriter)
            (java.nio.file Files)
            (java.net Socket)
            (java.util Scanner)
@@ -88,7 +91,9 @@
 (defn- read-control-port [tor-process]
   (let [input-stream (.getInputStream tor-process)
         scanner (new Scanner input-stream)]
-    (->> #(.nextLine scanner)
+    (->> #(let [line (.nextLine scanner)]
+            (println line)
+            line)
          repeatedly
          (map #(re-find #"listening on port (\d+)\." %))
          (filter identity)
@@ -119,22 +124,25 @@
 
 
 (defn- install-files [ctx]
-  (.installFiles (:proxy-context ctx)))
+  (.installFiles (:proxy-context ctx))
+  (if-not (-> :tor-exe-file ctx (.setExecutable true))
+    (throw (Exception. "Could not make Tor executable"))))
 
 
 (defn- configure-files [ctx]
-  (if-not (-> :tor-exe-file ctx (.setExecutable true))
-    (throw (Exception. "Could not make Tor executable")))
   (let [torrc-file (:torrc-file ctx)
         cookie-file    (-> :cookie-file ctx .getAbsolutePath)
         data-directory (-> :working-dir ctx .getAbsolutePath)
         geoip-file     (-> :geoip-file ctx .getName)
-        geoipv6-file   (-> :geoipv6-file ctx .getName)]
-    (with-open [r (io/input-stream torrc-file)]
-      (println "CookieAuthFile" cookie-file)
-      (println "DataDirectory"  data-directory)
-      (println "GeoIPFile"      geoip-file)
-      (println "GeoIPv6File"    geoipv6-file))))
+        geoipv6-file   (-> :geoipv6-file ctx .getName)
+        file-writer (new FileWriter torrc-file true)
+        buffered-writer (new BufferedWriter file-writer)
+        print-writer (new PrintWriter buffered-writer)]
+    (.println print-writer (str "CookieAuthFile " cookie-file))
+    (.println print-writer (str "DataDirectory " data-directory))
+    (.println print-writer (str "GeoIPFile " geoip-file))
+    (.println print-writer (str "GeoIPv6File " geoipv6-file))
+    (.close print-writer)))
 
 
 (defn- authenticate [control-connection cookie-file owner]
