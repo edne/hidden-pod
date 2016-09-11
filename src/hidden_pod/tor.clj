@@ -107,15 +107,13 @@
 
 (defn- start-tor-process [ctx owner]
   (let [tor-path (-> :tor-exe-file ctx .getAbsolutePath)
-        config-path (-> :torrc-file ctx .getAbsolutePath)
+        ;tor-path "tor"
+        ;config-path (-> :torrc-file ctx .getAbsolutePath)
+        config-path "resources/torrc"
         working-dir (-> :working-dir ctx .getAbsolutePath)
-        pid (get-pid)
-        cmd [tor-path "-f" config-path owner pid]
+        cmd [tor-path "-f" config-path]
         process-builder (new ProcessBuilder cmd)
         environment (.environment process-builder)]
-    (.put environment "HOME" working-dir)
-    (if (linux?)
-      (.put environment "LD_LIBRARY_PATH" working-dir))
     (.start process-builder)))
 
 
@@ -131,7 +129,7 @@
         file-writer (new FileWriter torrc-file true)
         buffered-writer (new BufferedWriter file-writer)
         print-writer (new PrintWriter buffered-writer)]
-    (.println print-writer (str "DataDirectory " data-directory))
+    ;(.println print-writer (str "DataDirectory " data-directory))
     (.close print-writer)))
 
 
@@ -159,7 +157,7 @@
         control-socket (new Socket "127.0.0.1" control-port)
         control-connection (new TorControlConnection control-socket)]
     (.authenticate control-connection (make-array Byte/TYPE 0))
-    (.setConf control-connection "DisableNetwork" "0")
+    ;(.setConf control-connection "DisableNetwork" "0")
     (start-with-timeout (merge ctx {:control-socket control-socket
                                      :control-connection control-connection})
                         30)))
