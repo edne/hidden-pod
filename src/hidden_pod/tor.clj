@@ -48,10 +48,6 @@
   (.contains (get-os-name) "mac"))
 
 
-(defn- enable-network [control-connection]
-  (.setConf control-connection "DisableNetwork" "0"))
-
-
 (defn- bootstrapped? [control-connection]
   (-> control-connection
       (.getinfo "status/bootstrap-phase")
@@ -131,30 +127,18 @@
 
 (defn- configure-files [ctx]
   (let [torrc-file (:torrc-file ctx)
-        cookie-file    (-> :cookie-file ctx .getAbsolutePath)
         data-directory (-> :working-dir ctx .getAbsolutePath)
         file-writer (new FileWriter torrc-file true)
         buffered-writer (new BufferedWriter file-writer)
         print-writer (new PrintWriter buffered-writer)]
-    (.println print-writer (str "CookieAuthFile " cookie-file))
     (.println print-writer (str "DataDirectory " data-directory))
     (.close print-writer)))
-
-
-(defn- authenticate [control-connection cookie-file owner]
-  (doto control-connection
-    (.authenticate (FileUtilities/read cookie-file))  ;; TODO: use clj read
-    (.takeOwnership)
-    (.resetConf [owner])
-    (.setEventHandler (new OnionProxyManagerEventHandler))
-    (.setEvents ["CIRC" "ORCONN" "NOTICE" "WARN" "ERR"])))
 
 
 (defn- start-with-timeout [ctx timeout-secs]
   {:pre [(> timeout-secs 0)]}
   (let [control-connection (:control-connection ctx)
         control-socket (:control-socket ctx)]
-    (enable-network control-connection)
     (if-not (->> #(or (bootstrapped? control-connection)
                       (Thread/sleep 1000))
                  (take timeout-secs)
@@ -169,18 +153,15 @@
 (defn- start-tor [ctx]
   (install-files ctx)
   (configure-files ctx)
-  (let [cookie-file (:cookie-file ctx)
-        cookie-observer (new-observer cookie-file)
-        owner "__OwningControllerProcess"
+  (let [owner "__OwningControllerProcess"
         tor-process (start-tor-process ctx owner)
         control-port (read-control-port tor-process)
         control-socket (new Socket "127.0.0.1" control-port)
         control-connection (new TorControlConnection control-socket)]
-    (wait-observer cookie-observer 3)
-    (authenticate control-connection cookie-file owner)
+    (.authenticate control-connection (make-array Byte/TYPE 0))
+    (.setConf control-connection "DisableNetwork" "0")
     (start-with-timeout (merge ctx {:control-socket control-socket
-                                     :control-connection control-connection
-                                     :cookie-file cookie-file})
+                                     :control-connection control-connection})
                         30)))
 
 
@@ -203,7 +184,6 @@
      :torrc-file  (new File working-dir torrc-name)
      :tor-exe-file (new File working-dir
                         (get-tor-exe-filename))
-     :cookie-file (new File working-dir ".tor/control_auth_cookie")
      :hostname-file (new File working-dir
                          (str "/" hiddenservice-dir-name "/hostname"))}))
 
