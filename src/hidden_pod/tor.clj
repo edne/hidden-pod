@@ -79,60 +79,6 @@
   (.saveConf control-connection))
 
 
-(defn- stop-proxy [control-socket]
-  (if control-socket
-    (.close control-socket)))
-
-
-(defn- read-control-port [tor-process]
-  (let [input-stream (.getInputStream tor-process)
-        scanner (new Scanner input-stream)]
-    (->> #(let [line (.nextLine scanner)]
-            (println line)
-            line)
-         repeatedly
-         (map #(re-find #"listening on port (\d+)\." %))
-         (filter identity)
-         first  ;; the first non-empy list of matches ["1234." "1234"]
-         last   ;; the last match in the list
-         Integer/parseInt)))
-
-
-(defn- get-pid []
-  (-> (java.lang.management.ManagementFactory/getRuntimeMXBean)
-      .getName
-      (string/split #"@")
-      first))
-
-
-(defn- start-tor-process [ctx owner]
-  (let [tor-path (-> :tor-exe-file ctx .getAbsolutePath)
-        ;tor-path "tor"
-        ;config-path (-> :torrc-file ctx .getAbsolutePath)
-        config-path "resources/torrc"
-        working-dir (-> :working-dir ctx .getAbsolutePath)
-        cmd [tor-path "-f" config-path]
-        process-builder (new ProcessBuilder cmd)
-        environment (.environment process-builder)]
-    (.start process-builder)))
-
-
-(defn- install-files [ctx]
-  (.installFiles (:proxy-context ctx))
-  (if-not (-> :tor-exe-file ctx (.setExecutable true))
-    (throw (Exception. "Could not make Tor executable"))))
-
-
-(defn- configure-files [ctx]
-  (let [torrc-file (:torrc-file ctx)
-        data-directory (-> :working-dir ctx .getAbsolutePath)
-        file-writer (new FileWriter torrc-file true)
-        buffered-writer (new BufferedWriter file-writer)
-        print-writer (new PrintWriter buffered-writer)]
-    ;(.println print-writer (str "DataDirectory " data-directory))
-    (.close print-writer)))
-
-
 (defn- start-with-timeout [ctx timeout-secs]
   {:pre [(> timeout-secs 0)]}
   (let [control-connection (:control-connection ctx)
@@ -142,32 +88,20 @@
                  (take timeout-secs)
                  (filter identity)
                  #(if % (first %)))
-      (do (stop-proxy control-socket)
-          (.deleteAllFilesButHiddenServices (:proxy-context ctx))
+      (do (.close control-socket)
           (throw (Exception. "Failed to run Tor")))
       ctx)))
 
 
-(defn- start-tor [ctx]
-  (install-files ctx)
-  (configure-files ctx)
-  (let [owner "__OwningControllerProcess"
-        tor-process (start-tor-process ctx owner)
-        control-port (read-control-port tor-process)
+(defn- connect-to-tor [ctx]
+  (let [control-port 9051
         control-socket (new Socket "127.0.0.1" control-port)
         control-connection (new TorControlConnection control-socket)]
     (.authenticate control-connection (make-array Byte/TYPE 0))
-    ;(.setConf control-connection "DisableNetwork" "0")
     (start-with-timeout (merge ctx {:control-socket control-socket
-                                     :control-connection control-connection})
-                        30)))
-
-
-(defn- get-tor-exe-filename []
-  (cond (linux?) "tor"
-        (windows?) "tor.exe"
-        (mac?) "tor.real"
-        :else (throw (Exception. "Unsupported OS"))))
+                                    :control-connection control-connection})
+                        30)
+    control-connection))
 
 
 (defn- create-context []
@@ -180,8 +114,6 @@
      :working-dir working-dir
      :torrc-name torrc-name
      :torrc-file  (new File working-dir torrc-name)
-     :tor-exe-file (new File working-dir
-                        (get-tor-exe-filename))
      :hostname-file (new File working-dir
                          (str "/" hiddenservice-dir-name "/hostname"))}))
 
@@ -191,8 +123,7 @@
   [local-port remote-port]
   (let [ctx (create-context)
         control-connection (-> ctx
-                               start-tor
-                               :control-connection)
+                               connect-to-tor)
         hostname-file (:hostname-file ctx)
         observer (new-observer hostname-file)]
     (set-conf control-connection
