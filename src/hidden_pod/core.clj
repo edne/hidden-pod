@@ -11,5 +11,4 @@
     (let [path (first args)
           local-port 3000
           onion-addr (tor/publish-hidden-service local-port 80)]
-      (println "Serving at:" onion-addr)
       (server/serve-folder path local-port))))

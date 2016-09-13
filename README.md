@@ -6,7 +6,7 @@ Static hidden services with no effort
 ## TODO
 - Fix dependencies:
   - Get [jtorctl](https://github.com/guardianproject/jtorctl) from Maven
-  - Try to avoid [Tor_Onion_Proxy_Library](https://github.com/thaliproject/Tor_Onion_Proxy_Library)
+  - <del>Try to avoid [Tor_Onion_Proxy_Library](https://github.com/thaliproject/Tor_Onion_Proxy_Library)</del>
 - Directory indexing
 - GUI
 - Exhaustive readme
