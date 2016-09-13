@@ -1,4 +1,4 @@
-(ns hidden-pod.tor
+(ns hidden-pod.onion
   (:require [clojure.string :as string]
             [clojure.java.io :as io]
             [juxt.dirwatch :refer (watch-dir)])

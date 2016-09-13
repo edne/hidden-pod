@@ -1,5 +1,5 @@
 (ns hidden-pod.core
-  (:require [hidden-pod.tor :as tor]
+  (:require [hidden-pod.onion :as onion]
             [hidden-pod.server :as server])
   (:gen-class))
 
@@ -9,6 +9,6 @@
   [& args]
   (if args
     (let [path (first args)
-          local-port 3000
-          onion-addr (tor/publish-hidden-service local-port 80)]
+          local-port 3000]
+      (onion/publish-hidden-service local-port 80)
       (server/serve-folder path local-port))))
