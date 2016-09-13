@@ -10,5 +10,7 @@
   (if args
     (let [path (first args)
           local-port 3000]
-      (onion/publish-hidden-service local-port 80)
+      (onion/publish-hidden-service local-port 80
+                                    (fn [hostname]
+                                      (println "Serving at: " hostname)))
       (server/serve-folder path local-port))))

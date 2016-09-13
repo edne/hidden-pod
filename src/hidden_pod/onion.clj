@@ -67,7 +67,7 @@
 
 (defn publish-hidden-service
   "Create an hidden service forwarding a port, return the address"
-  [local-port remote-port]
+  [local-port remote-port callback]
   (let [working-dir (create-directory)
         _ (run-tor working-dir)
         control-connection (connect)
@@ -75,7 +75,7 @@
     (watch-dir #(let [file-name (-> % :file .getName)
                       full-path (-> % :file .getAbsolutePath)]
                   (if (= file-name "hostname")
-                    (println "Serving at: " (slurp full-path))))
+                    (callback (slurp full-path))))
                working-dir)
     (set-conf control-connection
               hostname-file
