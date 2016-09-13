@@ -6,6 +6,7 @@
   :resource-paths ["resources/jtorctl-briar.jar"]
   :dependencies [[org.clojure/clojure "1.7.0"]
                  [juxt/dirwatch "0.2.3"]
+                 [me.raynes/conch "0.8.0"]
                  [ring "1.5.0"]]
 
   :main ^:skip-aot hidden-pod.core
