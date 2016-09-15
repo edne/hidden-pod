@@ -1,0 +1,3 @@
+[submodule "jtorctl"]
+	path = jtorctl
+	url = https://github.com/guardianproject/jtorctl

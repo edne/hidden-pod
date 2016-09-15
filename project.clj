@@ -3,7 +3,7 @@
   :url "https://github.com/edne/hidden-pod"
   :license {:name "The MIT License"
             :url "https://opensource.org/licenses/MIT"}
-  :resource-paths ["resources/jtorctl-briar.jar"]
+  :java-source-paths ["jtorctl"]
   :dependencies [[org.clojure/clojure "1.7.0"]
                  [me.raynes/conch "0.8.0"]
                  [ring "1.5.0"]]
