@@ -1,4 +1,4 @@
-(defproject hidden-pod "0.1.0-SNAPSHOT"
+(defproject hidden-pod "0.1.0"
   :description "Static hidden services with no effort"
   :url "https://github.com/edne/hidden-pod"
   :license {:name "The MIT License"
