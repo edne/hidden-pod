@@ -44,7 +44,6 @@ This is an alpha software, do not use it for anything critical.
 
 
 ## TODO
-- Lower jetty loglevel
 - Search for Tor binaries in default paths (or directly download the
   Tor Browser Bundle)
 - Directory indexing
